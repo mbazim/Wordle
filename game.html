@@ -1,0 +1,368 @@
+{% extends "base.html" %}
+
+{% block title %}Play Wordle{% endblock %}
+
+{% block head %}
+<style>
+    .letter-tile {
+        width: 60px;
+        height: 60px;
+        display: inline-flex;
+        justify-content: center;
+        align-items: center;
+        margin: 2px;
+        font-weight: bold;
+        font-size: 2rem;
+        text-transform: uppercase;
+        border: 2px solid #d3d6da;
+        transition: all 0.3s ease;
+    }
+    .letter-tile.unused {
+        background-color: #f4f4f4;
+        color: black;
+    }
+    .letter-tile.filled {
+        background-color: white;
+        border-color: #787c7e;
+        color: black;
+    }
+    .letter-tile.correct { background-color: #6aaa64; color: white; }
+    .letter-tile.present { background-color: #c9b458; color: white; }
+    .letter-tile.absent { background-color: #787c7e; color: white; }
+    .unused-row {
+        opacity: 0.6;
+    }
+    .keyboard-row button {
+        margin: 0 2px;
+        padding: 10px;
+        background-color: #d3d6da;
+        border-radius: 4px;
+        font-weight: bold;
+        transition: background-color 0.2s ease;
+    }
+    .keyboard-row button:hover {
+        background-color: #bbb;
+    }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="flex flex-col items-center">
+    <div id="game-container" class="w-full max-w-md">
+        <div id="game-board" class="mb-4">
+            <div id="guess-container" class="space-y-2">
+                {% for i in range(6) %}
+                <div id="guess-{{ i }}" class="flex justify-center {% if i > 0 %}unused-row{% endif %}">
+                    {% for j in range(5) %}
+                    <div class="letter-tile unused" data-row="{{ i }}" data-col="{{ j }}"></div>
+                    {% endfor %}
+                </div>
+                {% endfor %}
+            </div>
+        </div>
+
+        <div id="keyboard" class="mt-4">
+            <div class="flex justify-center space-x-1 mb-2">
+                <div class="keyboard-row">
+                    {% for letter in 'QWERTYUIOP' %}
+                    <button onclick="handleKeyboardInput('{{ letter }}')">{{ letter }}</button>
+                    {% endfor %}
+                </div>
+            </div>
+            <div class="flex justify-center space-x-1 mb-2">
+                <div class="keyboard-row">
+                    {% for letter in 'ASDFGHJKL' %}
+                    <button onclick="handleKeyboardInput('{{ letter }}')">{{ letter }}</button>
+                    {% endfor %}
+                </div>
+            </div>
+            <div class="flex justify-center space-x-1">
+                <div class="keyboard-row">
+                    <button onclick="handleEnter()" class="px-4">Enter</button>
+                    {% for letter in 'ZXCVBNM' %}
+                    <button onclick="handleKeyboardInput('{{ letter }}')">{{ letter }}</button>
+                    {% endfor %}
+                    <button onclick="handleBackspace()" class="px-4">⌫</button>
+                </div>
+            </div>
+        </div>
+
+        <div id="message-area" class="text-center mt-4 h-10 text-red-500"></div>
+        
+        <div class="flex justify-center mt-4">
+            <button onclick="resetGame()" class="bg-green-500 text-white px-4 py-2 rounded hover:bg-green-600">
+                New Game
+            </button>
+        </div>
+    </div>
+
+    <!-- Statistics Modal -->
+    <div id="stats-modal" class="fixed inset-0 z-50 hidden items-center justify-center">
+        <div class="bg-white rounded-lg shadow-xl p-6 w-96">
+            <div class="flex justify-between items-center mb-4">
+                <h2 class="text-2xl font-bold">Game Statistics</h2>
+                <button onclick="closeStatsModal()" class="text-gray-500 hover:text-gray-700">
+                    <i class="fas fa-times"></i>
+                </button>
+            </div>
+            <div class="grid grid-cols-3 gap-4 text-center">
+                <div>
+                    <div class="text-3xl font-bold" id="games-played">0</div>
+                    <div class="text-sm text-gray-600">Played</div>
+                </div>
+                <div>
+                    <div class="text-3xl font-bold" id="win-percentage">0%</div>
+                    <div class="text-sm text-gray-600">Win %</div>
+                </div>
+                <div>
+                    <div class="text-3xl font-bold" id="current-streak">0</div>
+                    <div class="text-sm text-gray-600">Current Streak</div>
+                </div>
+            </div>
+            <div class="mt-4">
+                <h3 class="text-lg font-semibold mb-2">Guess Distribution</h3>
+                <div id="guess-distribution">
+                    {% for i in range(1, 7) %}
+                    <div class="flex items-center mb-1">
+                        <div class="w-6 text-right mr-2">{{ i }}</div>
+                        <div class="flex-grow bg-gray-200 rounded-full h-4">
+                            <div class="bg-green-500 rounded-full h-4" style="width: 0%;" id="guess-dist-{{ i }}"></div>
+                        </div>
+                    </div>
+                    {% endfor %}
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+    let currentGuess = [];
+    let currentRow = 0;
+    let gameStats = {
+        gamesPlayed: 0,
+        gamesWon: 0,
+        currentStreak: 0,
+        maxStreak: 0,
+        guessDistribution: {1: 0, 2: 0, 3: 0, 4: 0, 5: 0, 6: 0}
+    };
+    let isGameOver = false;
+
+    // Add keyboard event listener for physical keyboard
+    document.addEventListener('keydown', function(event) {
+        // Prevent input if game is over
+        if (isGameOver) return;
+
+        const key = event.key.toUpperCase();
+        
+        // Check if key is a letter
+        if (/^[A-Z]$/.test(key)) {
+            handleKeyboardInput(key);
+        } 
+        // Handle Enter key
+        else if (key === 'ENTER') {
+            handleEnter();
+        } 
+        // Handle Backspace
+        else if (key === 'BACKSPACE') {
+            handleBackspace();
+        }
+    });
+
+    function showMessage(message, type = 'error') {
+        const messageArea = document.getElementById('message-area');
+        messageArea.textContent = message;
+        messageArea.className = `text-center mt-4 h-10 ${type === 'error' ? 'text-red-500' : 'text-green-500'}`;
+        
+        // Clear message after 3 seconds
+        setTimeout(() => {
+            messageArea.textContent = '';
+        }, 3000);
+    }
+
+    function handleKeyboardInput(letter) {
+        // Prevent input if game is over or guess is already 5 letters long
+        if (isGameOver || currentGuess.length >= 5) return;
+
+        currentGuess.push(letter);
+        
+        // Update the current row's tile
+        const currentRowElement = document.getElementById(`guess-${currentRow}`);
+        const tile = currentRowElement.children[currentGuess.length - 1];
+        tile.textContent = letter;
+        tile.classList.remove('unused');
+        tile.classList.add('filled');
+    }
+
+    function handleBackspace() {
+        if (currentGuess.length > 0) {
+            // Remove the last letter
+            currentGuess.pop();
+            
+            // Update the current row's tile
+            const currentRowElement = document.getElementById(`guess-${currentRow}`);
+            const tile = currentRowElement.children[currentGuess.length];
+            tile.textContent = '';
+            tile.classList.remove('filled');
+            tile.classList.add('unused');
+        }
+    }
+
+    function handleEnter() {
+        if (currentGuess.length === 5) {
+            const guessWord = currentGuess.join('');
+            
+            fetch('/guess', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                },
+                body: JSON.stringify({ guess: guessWord })
+            })
+            .then(response => response.json())
+            .then(data => {
+                if (data.valid) {
+                    const row = document.getElementById(`guess-${currentRow}`);
+                    
+                    data.result.forEach((status, index) => {
+                        const tile = row.children[index];
+                        tile.classList.remove('filled');
+                        tile.classList.add(status);
+                    });
+
+                    if (data.is_win) {
+                        showMessage('Congratulations! You won!', 'success');
+                        
+                        gameStats.gamesPlayed++;
+                        gameStats.gamesWon++;
+                        gameStats.currentStreak++;
+                        gameStats.maxStreak = Math.max(gameStats.currentStreak, gameStats.maxStreak);
+                        gameStats.guessDistribution[currentRow + 1]++;
+                        
+                        saveGameStats();
+                        updateStatsDisplay();
+                        
+                        isGameOver = true;
+                        showStatsModal();
+                    } else if (data.is_game_over) {
+                        showMessage(`Game over. The word was ${data.target_word}`, 'error');
+                        
+                        gameStats.gamesPlayed++;
+                        gameStats.currentStreak = 0;
+                        
+                        saveGameStats();
+                        updateStatsDisplay();
+                        
+                        isGameOver = true;
+                        showStatsModal();
+                    }
+
+                    currentRow++;
+                    currentGuess = [];
+
+                    // Update row visibility
+                    updateRowVisibility();
+                } else {
+                    showMessage(data.error, 'error');
+                }
+            });
+        } else {
+            showMessage('Not enough letters', 'error');
+        }
+    }
+
+    function updateRowVisibility() {
+        for (let i = 0; i < 6; i++) {
+            const row = document.getElementById(`guess-${i}`);
+            if (i <= currentRow) {
+                row.classList.remove('unused-row');
+            } else {
+                row.classList.add('unused-row');
+            }
+        }
+    }
+
+    function loadGameStats() {
+        const storedStats = localStorage.getItem('wordleStats');
+        if (storedStats) {
+            gameStats = JSON.parse(storedStats);
+            updateStatsDisplay();
+        }
+    }
+
+    function saveGameStats() {
+        localStorage.setItem('wordleStats', JSON.stringify(gameStats));
+    }
+
+    function updateStatsDisplay() {
+        document.getElementById('games-played').textContent = gameStats.gamesPlayed;
+        document.getElementById('win-percentage').textContent = 
+            gameStats.gamesPlayed > 0 
+                ? Math.round((gameStats.gamesWon / gameStats.gamesPlayed) * 100) + '%'
+                : '0%';
+        document.getElementById('current-streak').textContent = gameStats.currentStreak;
+
+        for (let i = 1; i <= 6; i++) {
+            const distBar = document.getElementById(`guess-dist-${i}`);
+            const percentage = gameStats.gamesPlayed > 0 
+                ? (gameStats.guessDistribution[i] / gameStats.gamesPlayed) * 100 
+                : 0;
+            distBar.style.width = `${percentage}%`;
+        }
+    }
+
+    function showStatsModal() {
+        const modal = document.getElementById('stats-modal');
+        modal.classList.remove('hidden');
+        modal.classList.add('flex');
+    }
+
+    function closeStatsModal() {
+        const modal = document.getElementById('stats-modal');
+        modal.classList.remove('flex');
+        modal.classList.add('hidden');
+    }
+
+    function resetGame() {
+        fetch('/reset', { method: 'POST' })
+        .then(response => response.json())
+        .then(() => {
+            // Reset game state
+            currentGuess = [];
+            currentRow = 0;
+            isGameOver = false;
+            
+            // Reset game board
+            for (let i = 0; i < 6; i++) {
+                const row = document.getElementById(`guess-${i}`);
+                row.innerHTML = '';
+                
+                for (let j = 0; j < 5; j++) {
+                    const tile = document.createElement('div');
+                    tile.classList.add('letter-tile', 'unused');
+                    tile.dataset.row = i;
+                    tile.dataset.col = j;
+                    row.appendChild(tile);
+                }
+            }
+            
+            // Reset message area
+            const messageArea = document.getElementById('message-area');
+            messageArea.textContent = '';
+
+            // Update row visibility
+            updateRowVisibility();
+
+            // Close stats modal if open
+            const modal = document.getElementById('stats-modal');
+            modal.classList.remove('flex');
+            modal.classList.add('hidden');
+        });
+    }
+
+    // Load game stats on page load
+    loadGameStats();
+</script>
+{% endblock %}
